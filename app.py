@@ -1,0 +1,52 @@
+from typing import Any
+
+def normalize_okta_event(raw_event: dict[str,Any]) -> dict[str, Any]:
+    # Convert an Okta-style raw event into our normalzied SIEM event schema
+
+    """
+        Raw Okta field examples:
+        - id
+        - published
+        - eventType
+        - actor.alternateId
+        - client.ipAddress
+        - outcome.result
+
+        Normalized fields:
+        - event_id
+        - timestamp
+        - source
+        - event_type
+        - action
+        - outcome
+        - user
+        - source_ip
+        - raw
+    """
+    event_type = raw_event.get("eventType", "")
+
+    if "authentication" in event_type:
+        normalized_event_type = "authentication"
+    else:
+        normalized_event_type = "unknown"
+
+    if "failed" in event_type or "success" in event_type:
+        action = "login"
+    else:
+        action = "unknown"
+
+    actor = raw_event.get("actor") or {}
+    client = raw_event.get("client") or {}
+    outcome = raw_event.get("outcome") or {}
+
+    return {
+        "event_id": raw_event.get("id"),
+        "timestamp": raw_event.get("published"),
+        "source": "okta",
+        "event_type": normalized_event_type,
+        "action": action,
+        "outcome": str(outcome.get("result", "unknown")).lower(),
+        "user": actor.get("alternateId"),
+        "source_ip": client.get("ipAddress"),
+        "raw": raw_event,
+    }
