@@ -50,3 +50,22 @@ def normalize_okta_event(raw_event: dict[str,Any]) -> dict[str, Any]:
         "source_ip": client.get("ipAddress"),
         "raw": raw_event,
     }
+
+def normalize_aws_event(raw_event: dict[str, Any]) -> dict[str, Any]:
+    """
+        Convert an AWS CloudTrail raw event into the normalized SIEM event schema
+    """
+
+    user_identity = raw_event.get("user_identity") or {}
+
+    return {
+        "event_id": raw_event.get("id"),
+        "timestamp": raw_event.get("eventTime"),
+        "source": "aws",
+        "event_type": "cloudtrail",
+        "action": raw_event.get("eventName"),
+        "outcome": "unknown",
+        "user": user_identity.get("arn"),
+        "source_ip": raw_event.get("sourceIPAddress"),
+        "raw": raw_event,
+    }
