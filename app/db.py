@@ -3,21 +3,28 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+
 DB_PATH = Path("mini_siem.db")
 
-def get_connection() -> sqlite3.Connection:
-    """
-        Opens a conenction to the sqlite database
-        SQLite has evertything stored in a local file
-    """
 
+def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
 
+
 def initialize_database() -> None:
     """
-        Create the database tables if they dont exist
+    Create the database tables if they do not already exist.
+
+    events:
+        Valid normalized security events.
+
+    dead_letters:
+        Invalid events that failed validation.
+
+    pipeline_state:
+        Stores cursors so ingestion can resume where it left off.
     """
 
     with get_connection() as connection:
@@ -25,9 +32,9 @@ def initialize_database() -> None:
 
         cursor.execute(
             """
-             CREATE TABLE IF NOT EXISTS events (
+            CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id TEXT NOT NULL,
+                event_id TEXT NOT NULL UNIQUE,
                 timestamp TEXT NOT NULL,
                 source TEXT NOT NULL,
                 event_type TEXT NOT NULL,
@@ -36,7 +43,7 @@ def initialize_database() -> None:
                 user TEXT,
                 source_ip TEXT,
                 raw_event TEXT NOT NULL
-            )        
+            )
             """
         )
 
@@ -52,11 +59,25 @@ def initialize_database() -> None:
             """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pipeline_state (
+                source TEXT PRIMARY KEY,
+                cursor TEXT NOT NULL
+            )
+            """
+        )
+
         connection.commit()
 
-def save_event(event: dict[str, Any]) -> None:
+
+def save_event(event: dict[str, Any]) -> bool:
     """
-        Saves a valid normalized event into the SIEM events table
+    Save a valid normalized event.
+
+    Returns:
+        True if inserted.
+        False if it was a duplicate event_id.
     """
 
     with get_connection() as connection:
@@ -64,7 +85,7 @@ def save_event(event: dict[str, Any]) -> None:
 
         cursor.execute(
             """
-            INSERT INTO events (
+            INSERT OR IGNORE INTO events (
                 event_id,
                 timestamp,
                 source,
@@ -92,13 +113,15 @@ def save_event(event: dict[str, Any]) -> None:
 
         connection.commit()
 
+        return cursor.rowcount == 1
+
+
 def save_dead_letter(
     normalized_event: dict[str, Any],
     missing_fields: list[str],
 ) -> None:
     """
     Save an invalid event to the dead-letter table.
-    This lets us debug malformed events instead of silently dropping them.
     """
 
     with get_connection() as connection:
@@ -125,12 +148,55 @@ def save_dead_letter(
         connection.commit()
 
 
-def get_all_events() -> list[dict[str, Any]]:
+def get_pipeline_cursor(source: str) -> str:
     """
-    Return all valid events from the fake SIEM.
-    Useful for debugging and later for detections.
+    Get the last saved cursor for a source.
+
+    If this source has never been ingested before, start at cursor 0.
     """
 
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT cursor
+            FROM pipeline_state
+            WHERE source = ?
+            """,
+            (source,),
+        )
+
+        row = cursor.fetchone()
+
+    if row is None:
+        return "0"
+
+    return row["cursor"]
+
+
+def set_pipeline_cursor(source: str, cursor_value: str) -> None:
+    """
+    Save the latest cursor for a source.
+    """
+
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO pipeline_state (source, cursor)
+            VALUES (?, ?)
+            ON CONFLICT(source)
+            DO UPDATE SET cursor = excluded.cursor
+            """,
+            (source, cursor_value),
+        )
+
+        connection.commit()
+
+
+def get_all_events() -> list[dict[str, Any]]:
     with get_connection() as connection:
         cursor = connection.cursor()
 
@@ -158,10 +224,6 @@ def get_all_events() -> list[dict[str, Any]]:
 
 
 def get_all_dead_letters() -> list[dict[str, Any]]:
-    """
-    Return all dead-lettered events.
-    """
-
     with get_connection() as connection:
         cursor = connection.cursor()
 
@@ -175,6 +237,23 @@ def get_all_dead_letters() -> list[dict[str, Any]]:
                 raw_event
             FROM dead_letters
             ORDER BY id ASC
+            """
+        )
+
+        rows = cursor.fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def get_pipeline_state() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT source, cursor
+            FROM pipeline_state
+            ORDER BY source ASC
             """
         )
 

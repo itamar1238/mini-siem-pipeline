@@ -27,12 +27,9 @@ def normalize_okta_event(raw_event: dict[str,Any]) -> dict[str, Any]:
 
     if "authentication" in event_type:
         normalized_event_type = "authentication"
-    else:
-        normalized_event_type = "unknown"
-
-    if "failed" in event_type or "success" in event_type:
         action = "login"
     else:
+        normalized_event_type = "unknown"
         action = "unknown"
 
     actor = raw_event.get("actor") or {}
